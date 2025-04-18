@@ -4,4 +4,9 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "loguru>=0.7.3",
+    "polars>=1.27.1",
+    "pytest>=8.3.5",
+    "python-pptx>=1.0.2",
+]

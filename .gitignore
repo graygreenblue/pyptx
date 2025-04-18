@@ -8,4 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+# Manual additions
 *.pptx
+.DS_Store

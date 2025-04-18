@@ -1,206 +1,155 @@
 """
-Core layout primitives (Rect, LayoutItem, Box/Row/Column).
-Only minimal behaviour is implemented – the engine is expected to be
-extended iteratively.
+Core layout engine – per‑child units, one shared add_box().
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import List, Optional, Sequence
+from dataclasses import dataclass
+from typing import Iterable, List, Optional, TypeVar, Union
 
-from .units import Unit, resolve_length_span
-from .errors import OverflowError
+from loguru import logger
 
+from .errors import LayoutStateError, SpecMismatchError
+from .units import Unit, Weight, resolve_length_span
 
-# ------------------------------------------------------------------ #
-# Geometry helpers
 # ------------------------------------------------------------------ #
 @dataclass(slots=True)
 class Rect:
-    """Axis‑aligned rectangle in EMUs."""
-
     x: int
     y: int
     width: int
     height: int
 
-    def split_vertical(self, specs: Sequence[Unit]) -> List["Rect"]:
-        """Divide the rectangle **horizontally** into columns."""
-        widths = resolve_length_span(specs, self.width)
-        rects: List[Rect] = []
-        cursor = self.x
+    # helpers --------------------------------------------------------
+    def split_vertical(self, specs: List[Unit]) -> List["Rect"]:
+        widths, cursor, out = resolve_length_span(specs, self.width), self.x, []
         for w in widths:
-            rects.append(Rect(cursor, self.y, w, self.height))
+            out.append(Rect(cursor, self.y, w, self.height))
             cursor += w
-        return rects
+        return out
 
-    def split_horizontal(self, specs: Sequence[Unit]) -> List["Rect"]:
-        """Divide the rectangle **vertically** into rows."""
-        heights = resolve_length_span(specs, self.height)
-        rects: List[Rect] = []
-        cursor = self.y
+    def split_horizontal(self, specs: List[Unit]) -> List["Rect"]:
+        heights, cursor, out = resolve_length_span(specs, self.height), self.y, []
         for h in heights:
-            rects.append(Rect(self.x, cursor, self.width, h))
+            out.append(Rect(self.x, cursor, self.width, h))
             cursor += h
-        return rects
+        return out
 
 
 # ------------------------------------------------------------------ #
-# Layout tree
-# ------------------------------------------------------------------ #
+ChildT = TypeVar("ChildT", bound="LayoutItem")
+
 class LayoutItem:
-    """
-    Base node in the layout tree.
+    """Base node; can contain any LayoutItem subclass as a child."""
 
-    Subclasses implement :meth:`_layout_children` to position child items
-    within *self.rect*.
-    """
-
-    def __init__(self):
-        self.children: list["LayoutItem"] = []
+    def __init__(self, unit: Unit|None = None) -> None:
+        self.children: List["LayoutItem"] = []
         self.rect: Optional[Rect] = None
+        self.unit: Optional[Unit] = unit          # size relative to parent
 
-    # ---------------------------------------------------------------- #
-    # Public API
-    # ---------------------------------------------------------------- #
-    def add(self, item: "LayoutItem") -> "LayoutItem":
-        """Append *item* as a child and return it (for fluent calls)."""
+    # public --------------------------------------------------------
+    def add(self, item: ChildT) -> ChildT:
         self.children.append(item)
         return item
 
-    def layout(self, rect: Rect):
+    def add_box(self, unit: Unit | None = None) -> "Box":
         """
-        Resolve positions of *self* and its descendants.
+        Convenience: create a Box, set its *unit*, add it, and return it.
 
-        Subclasses should **not** override – implement
-        :meth:`_layout_children` instead.
+        If *unit* is omitted, Weight(1) is used so you don't have to specify
+        sizes up‑front.
         """
-        self.rect = rect
-        self._layout_children()
-
-    # ---------------------------------------------------------------- #
-    # Internal helpers
-    # ---------------------------------------------------------------- #
-    def _layout_children(self):
-    def walk(self):
-
-        """Yield *self* and all descendants."""
-
-        yield self
-
-        for _child in self.children:
-
-            yield from _child.walk()
-
-
-        """Position children inside *self.rect* (override in subclass)."""
-        # Default: if children exist, that's an error (no strategy).
-        if self.children:
-            raise NotImplementedError(
-                f"{self.__class__.__name__} cannot contain children"
-            )
-
-
-# ------------------------------------------------------------------ #
-# Concrete containers
-# ------------------------------------------------------------------ #
-class Box(LayoutItem):
-    """
-    Generic flex container.
-
-    Currently simply forwards full *rect* to the single child (if any).
-    """
-
-    def _layout_children(self):
-        if not self.children:
-            return
-        if len(self.children) > 1:
-            raise LayoutError("Box supports 0 or 1 child for now")
-        self.children[0].layout(self.rect)  # type: ignore[arg-type]
-
-
-class Row(LayoutItem):
-    """
-    Lay out children **horizontally** according to the *specs* list.
-
-    Each child is associated with a :class:`Unit`. A one‑to‑one mapping
-    must be provided up‑front.
-    """
-
-    def __init__(self, specs: Sequence[Unit]):
-        super().__init__()
-        self.specs: List[Unit] = list(specs)
-
-    # API sugar
-    def add_box(self, unit: Unit) -> Box:
         box = Box()
-        self.specs.append(unit)
+        box.unit = unit or Weight(1)      # set size before adding
         self.add(box)
         return box
 
-    # ---------------------------------------------------------------- #
-    # Layout algorithm
-    # ---------------------------------------------------------------- #
-    def _layout_children(self):
-        if len(self.specs) != len(self.children):
-            raise LayoutError(
-                f"Row expects {len(self.specs)} children, "
-                f"got {len(self.children)}"
-            )
-        columns = self.rect.split_vertical(self.specs)
-        for child, rect in zip(self.children, columns, strict=False):
+    def with_unit(self, unit: Unit) -> "LayoutItem":
+        """Fluent helper to set this item's unit and return self."""
+        self.unit = unit
+        return self
+
+    def __getitem__(self, idx: Union[int, tuple[int, ...]]) -> ChildT:
+        node: LayoutItem = self
+        if isinstance(idx, int):
+            return node.children[idx]          # type: ignore[return-value]
+        for i in idx:
+            node = node.children[i]
+        return node                             # type: ignore[return-value]
+
+    def walk(self) -> Iterable["LayoutItem"]:
+        yield self
+        for c in self.children:
+            yield from c.walk()
+
+    # layout helpers -----------------------------------------------
+    def _rect(self) -> Rect:
+        if self.rect is None:
+            raise LayoutStateError("LayoutItem has no rect; call resolve() first")
+        return self.rect
+
+    def layout(self, rect: Rect) -> None:
+        self.rect = rect
+        logger.debug(f"{self.__class__.__name__}.layout -> {rect}")
+        self._layout_children()
+
+    # subclasses override ------------------------------------------
+    def _layout_children(self) -> None: ...
+
+
+# ------------------------------------------------------------------ #
+class Box(LayoutItem):
+    def _layout_children(self) -> None:
+        self._rect()
+        if not self.children:
+            return
+        if len(self.children) != 1:
+            raise SpecMismatchError("Box supports exactly one child")
+        self.children[0].layout(self._rect())
+
+
+class Row(LayoutItem):
+    """Horizontal splitter (children laid out in columns)."""
+
+    def _layout_children(self) -> None:
+        units = [c.unit or Weight(1) for c in self.children]
+        for child, rect in zip(self.children, self._rect().split_vertical(units)):
             child.layout(rect)
 
 
 class Column(LayoutItem):
-    """
-    Lay out children **vertically** according to the *specs* list.
-    Equivalent to :class:`Row` but splits on the Y‑axis.
-    """
+    """Vertical splitter (children stacked in rows)."""
 
-    def __init__(self, specs: Sequence[Unit]):
-        super().__init__()
-        self.specs: List[Unit] = list(specs)
-
-    def add_box(self, unit: Unit) -> Box:
-        box = Box()
-        self.specs.append(unit)
-        self.add(box)
-        return box
-
-    def _layout_children(self):
-        if len(self.specs) != len(self.children):
-            raise LayoutError(
-                f"Column expects {len(self.specs)} children, "
-                f"got {len(self.children)}"
-            )
-        rows = self.rect.split_horizontal(self.specs)
-        for child, rect in zip(self.children, rows, strict=False):
+    def _layout_children(self) -> None:
+        units = [c.unit or Weight(1) for c in self.children]
+        for child, rect in zip(self.children, self._rect().split_horizontal(units)):
             child.layout(rect)
 
 
-# ------------------------------------------------------------------ #
-# Slide root
-# ------------------------------------------------------------------ #
-class SlideLayout(Box):
-    """
-    Root container representing an entire slide.
+class Folds(LayoutItem):
+    """Generic splitter – choose axis='horizontal' or 'vertical'."""
 
-    The `pptx.Slide` instance is *not* referenced directly – this class
-    merely resolves geometry for client code to apply to shapes.
-    """
-
-    def __init__(self, slide_width: int, slide_height: int):
-        """
-        Parameters
-        ----------
-        slide_width, slide_height : int
-            Slide dimensions in EMUs (see `pptx.util.Inches.to_emu`).
-        """
+    def __init__(self, axis: str) -> None:
         super().__init__()
-        self.slide_width = slide_width
-        self.slide_height = slide_height
+        if axis not in ("horizontal", "vertical"):
+            raise ValueError("axis must be 'horizontal' or 'vertical'")
+        self.axis = axis
 
-    def resolve(self):
-        """Resolve the full layout tree."""
+    def _layout_children(self) -> None:
+        units = [c.unit or Weight(1) for c in self.children]
+        parts = (
+            self._rect().split_horizontal(units)
+            if self.axis == "horizontal"
+            else self._rect().split_vertical(units)
+        )
+        for child, rect in zip(self.children, parts):
+            child.layout(rect)
+
+
+# Root container ----------------------------------------------------
+class SlideLayout(Box):
+    def __init__(self, width: int, height: int) -> None:
+        super().__init__()
+        self.slide_width, self.slide_height = width, height
+
+    def resolve(self) -> None:
         super().layout(Rect(0, 0, self.slide_width, self.slide_height))
