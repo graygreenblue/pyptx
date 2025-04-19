@@ -8,6 +8,8 @@ from pptx import Presentation
 from pyptx import  SlideRoot # type: ignore
 from pyptx.units import Inch, Auto # type: ignore
 
+import polars as pl
+
 
 # def margins(root: Area,
 #     size: Size = Inch(0.5),
@@ -43,18 +45,18 @@ def test_draw_rects(filename: str = "demo.pptx") -> None:
 
     root.resolve()
 
-    row1.debug_rect("row1")
-    row2.debug_rect("row2")
-
     box1.debug_rect("box1")
     box2.debug_rect("box2")
     box3.debug_rect("box3")
     box4.debug_rect("box4")
 
 
-    root[[0]].debug_rect("Left")
+    root[0].debug_rect("Left")
     root[[1,0]].debug_rect("Top")
-    root[[1,2]].debug_rect("Bottom")
+    root[1,2].debug_rect("Bottom")
+
+    df = pl.DataFrame({"id":[0,1,2],'col1':['abc','def','hij'],'col2':[4,5,6],'col3':[7,8,9]})
+    tbl = box1.add_table(df)
 
 
     # content = slide_default(root)

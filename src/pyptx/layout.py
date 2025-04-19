@@ -10,10 +10,11 @@ from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.presentation import Presentation
 from pptx.util import Emu, Pt
+import polars as pl
 
 from .errors import LayoutError, LayoutStateError, PPTXError, SpecMismatchError
 from .units import Size, Auto, resolve_length_span
-
+from .content import Table
 
 
 @dataclass(slots=True)
@@ -77,14 +78,14 @@ class Area:
         return self.parent.children.index(self)
 
     @property
-    def pos(self) -> list[int]:
+    def pos(self) -> tuple[int,...]:
         """Get list of indicies from slideroot."""
         idx: list[int] = []
         for level in self.walk_up():
             if isinstance(level, SlideRoot):
                 break
             idx.append(level.parent_pos)
-        return idx[::-1]
+        return tuple(idx[::-1])
 
     def _get_child(self, index: int) -> Area:
         if index < 0 or index >= len(self.children):
@@ -94,7 +95,7 @@ class Area:
     def __getitem__(self, index: int|Sequence[int]) -> Area:
         if isinstance(index, int):
             return self._get_child(index)
-        elif index == []:
+        elif len(index) == 0:
             return self
         else:
             return self._get_child(index[0])[index[1:]]
@@ -164,6 +165,9 @@ class Area:
         else:
             self.root.text(self.rect, f"{self.pos}")
 
+    def add_table(self, df: pl.DataFrame) -> Table:
+        return self.root.table(self.rect, df)
+
 # Root container ----------------------------------------------------
 class SlideRoot(Area):
     def __init__(self, prs: Presentation) -> None:
@@ -203,3 +207,9 @@ class SlideRoot(Area):
     def text(self, rect: Rect, text: str) -> None:
         shape = self._slide.shapes.add_textbox( rect.x, rect.y, rect.width, rect.height)
         shape.text = text
+
+    def table(self, rect: Rect, df: pl.DataFrame) -> Table:
+        rows = df.height+1
+        cols = df.width
+        gframe = self._slide.shapes.add_table(rows, cols, rect.x, rect.y, rect.width, rect.height)
+        return Table(df, gframe)
