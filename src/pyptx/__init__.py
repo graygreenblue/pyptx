@@ -2,15 +2,11 @@
 pyptx – flex-style layout helper for python-pptx.
 """
 from .errors import *
-from .units import Inch, Centimeter, Ratio, Weight, resolve_length_span
-from .core import Rect, LayoutItem, Box, Row, Column, Folds, SlideLayout
+from .units import Inch, Centimeter, Ratio, Auto, resolve_length_span
+from .layout import Rect, Area,  SlideRoot
 
-from pptx import Presentation
-from pptx.dml.color import RGBColor
-from pptx.enum.shapes import MSO_SHAPE
-from pptx.util import Pt
 
 __all__ = [
-    "Inch", "Centimeter", "Ratio", "Weight", "resolve_length_span",
-    "Rect", "LayoutItem", "Box", "Row", "Column", "Folds", "SlideLayout",
+    "Inch", "Centimeter", "Ratio", "Auto", "resolve_length_span",
+    "Rect", "Area",  "SlideRoot",
 ]

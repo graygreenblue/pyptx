@@ -8,6 +8,9 @@ class PyptxError(Exception):
         logger.error(f"{self.__class__.__name__} - {message}")
         super().__init__(message)
 
+class PPTXError(PyptxError):
+    """Base error for unexpected issues with python-pptx"""
+
 class LayoutError(PyptxError):
     """Base error for layout operations."""
 
